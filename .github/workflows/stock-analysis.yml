@@ -1,0 +1,166 @@
+name: AI Stock Analysis
+
+on:
+  schedule:
+    # HK market close: 16:30 Asia/Shanghai = 08:30 UTC
+    - cron: '30 8 * * 1-5'
+    # US market close follow-up: 08:00 Asia/Shanghai = 00:00 UTC
+    - cron: '0 0 * * 2-6'
+  workflow_dispatch:
+    inputs:
+      stock_scope:
+        description: 'Stock pool to analyze'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - hk
+          - us
+          - all
+          - custom
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'stocks-only'
+        type: choice
+        options:
+          - stocks-only
+          - full
+          - market-only
+      force_run:
+        description: 'Force run and skip trading day check'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ai-stock-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '45') }}
+
+    env:
+      HK_STOCK_LIST: ${{ vars.HK_STOCK_LIST || secrets.HK_STOCK_LIST || 'hk00100,hk06088,hk03625,hk02513,hk02655' }}
+      US_STOCK_LIST: ${{ vars.US_STOCK_LIST || secrets.US_STOCK_LIST || 'SPCX,NVDA,SNDK,AMD,INTC,AXTI,MU,MRVL' }}
+      STOCK_LIST_CONFIG: ${{ vars.STOCK_LIST || secrets.STOCK_LIST }}
+
+      GENERATION_BACKEND: ${{ vars.GENERATION_BACKEND || secrets.GENERATION_BACKEND }}
+      GENERATION_FALLBACK_BACKEND: ${{ vars.GENERATION_FALLBACK_BACKEND || secrets.GENERATION_FALLBACK_BACKEND || 'litellm' }}
+      LLM_CHANNELS: ${{ vars.LLM_CHANNELS || secrets.LLM_CHANNELS }}
+      LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+      LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL || 'gemini/gemini-2.5-flash' }}
+
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_API_KEYS: ${{ secrets.OPENAI_API_KEYS }}
+      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-3-flash-preview' }}
+      GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.5-flash' }}
+      AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}
+      ANSPIRE_API_KEYS: ${{ secrets.ANSPIRE_API_KEYS }}
+      ANSPIRE_LLM_MODEL: ${{ vars.ANSPIRE_LLM_MODEL || secrets.ANSPIRE_LLM_MODEL }}
+      ANSPIRE_LLM_BASE_URL: ${{ vars.ANSPIRE_LLM_BASE_URL || secrets.ANSPIRE_LLM_BASE_URL }}
+      ANSPIRE_LLM_ENABLED: ${{ vars.ANSPIRE_LLM_ENABLED || secrets.ANSPIRE_LLM_ENABLED }}
+
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+      FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+      NOTIFICATION_REPORT_CHANNELS: ${{ vars.NOTIFICATION_REPORT_CHANNELS || secrets.NOTIFICATION_REPORT_CHANNELS || 'discord,feishu' }}
+
+      REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
+      REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || 'zh-CN' }}
+      REPORT_SHOW_LLM_MODEL: ${{ vars.REPORT_SHOW_LLM_MODEL || secrets.REPORT_SHOW_LLM_MODEL || 'true' }}
+      SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
+      MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
+      TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
+      MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
+      LOG_LEVEL: ${{ vars.LOG_LEVEL || secrets.LOG_LEVEL || 'INFO' }}
+      ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
+      REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
+
+    steps:
+      - name: Random delay
+        run: sleep $((RANDOM % 60))
+
+      - name: Checkout upstream project
+        uses: actions/checkout@v5
+        with:
+          repository: ZhuLinsen/daily_stock_analysis
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create runtime directories
+        run: mkdir -p data logs reports
+
+      - name: Run analysis
+        run: |
+          SCHEDULE="${{ github.event.schedule || '' }}"
+          STOCK_SCOPE="${{ github.event.inputs.stock_scope || '' }}"
+
+          if [ "$SCHEDULE" = "30 8 * * 1-5" ]; then
+            export STOCK_LIST="$HK_STOCK_LIST"
+            STOCK_SCOPE="hk"
+          elif [ "$SCHEDULE" = "0 0 * * 2-6" ]; then
+            export STOCK_LIST="$US_STOCK_LIST"
+            STOCK_SCOPE="us"
+          elif [ "$STOCK_SCOPE" = "hk" ]; then
+            export STOCK_LIST="$HK_STOCK_LIST"
+          elif [ "$STOCK_SCOPE" = "us" ]; then
+            export STOCK_LIST="$US_STOCK_LIST"
+          elif [ "$STOCK_SCOPE" = "custom" ] && [ -n "${STOCK_LIST_CONFIG:-}" ]; then
+            export STOCK_LIST="$STOCK_LIST_CONFIG"
+          else
+            export STOCK_LIST="$HK_STOCK_LIST,$US_STOCK_LIST"
+            STOCK_SCOPE="all"
+          fi
+
+          MODE="${{ github.event.inputs.mode || 'stocks-only' }}"
+          if [ -n "$SCHEDULE" ]; then
+            MODE="stocks-only"
+          fi
+
+          FORCE_RUN_ARG=""
+          if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
+            FORCE_RUN_ARG="--force-run"
+          fi
+
+          echo "Time: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+          echo "Schedule: ${SCHEDULE:-manual}"
+          echo "Stock scope: $STOCK_SCOPE"
+          echo "Stock list: $STOCK_LIST"
+          echo "Mode: $MODE"
+          echo "Report channels: ${NOTIFICATION_REPORT_CHANNELS:-all configured}"
+
+          if [ "$MODE" = "market-only" ]; then
+            python main.py --market-review $FORCE_RUN_ARG
+          elif [ "$MODE" = "full" ]; then
+            python main.py $FORCE_RUN_ARG
+          else
+            python main.py --no-market-review $FORCE_RUN_ARG
+          fi
+
+      - name: Upload reports and logs
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: analysis-reports-${{ github.run_number }}
+          path: |
+            reports/
+            logs/
+          retention-days: 30
