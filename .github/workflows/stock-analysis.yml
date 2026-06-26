@@ -4,8 +4,8 @@ on:
   schedule:
     # HK market close: 16:30 Asia/Shanghai = 08:30 UTC
     - cron: '30 8 * * 1-5'
-    # US market close follow-up: 08:00 Asia/Shanghai = 00:00 UTC
-    - cron: '0 0 * * 2-6'
+    # US market close follow-up: 08:17 Asia/Shanghai = 00:17 UTC
+    - cron: '17 0 * * 2-6'
   workflow_dispatch:
     inputs:
       stock_scope:
@@ -116,7 +116,7 @@ jobs:
           if [ "$SCHEDULE" = "30 8 * * 1-5" ]; then
             export STOCK_LIST="$HK_STOCK_LIST"
             STOCK_SCOPE="hk"
-          elif [ "$SCHEDULE" = "0 0 * * 2-6" ]; then
+          elif [ "$SCHEDULE" = "17 0 * * 2-6" ]; then
             export STOCK_LIST="$US_STOCK_LIST"
             STOCK_SCOPE="us"
           elif [ "$STOCK_SCOPE" = "hk" ]; then
